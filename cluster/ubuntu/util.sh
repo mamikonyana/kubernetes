@@ -156,6 +156,8 @@ function verify-master(){
       ssh "$MASTER" "pgrep -f ${daemon}" >/dev/null 2>&1 || {
         printf "."
         validated="1"
+        # Try to start the service again if it's not running.
+        ssh "$MASTER" "sudo service $daemon start" >/dev/null 2>&1 || true
         sleep 2
       }
     done
@@ -175,6 +177,8 @@ function verify-minion(){
       ssh "$1" "pgrep -f $daemon" >/dev/null 2>&1 || {
         printf "."
         validated="1"
+        # Try to start the service again if it's not running.
+        ssh "$1" "sudo service $daemon start" >/dev/null 2>&1 || true
         sleep 2
       }
     done
