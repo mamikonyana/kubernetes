@@ -117,17 +117,18 @@ function trap-add {
 }
 
 function verify-cluster {
+  num_retries=$1
   ii=0
 
   for i in ${nodes}
   do
     if [ "${roles[${ii}]}" == "a" ]; then
-      verify-master
+      verify-master $num_retries || return 1
     elif [ "${roles[${ii}]}" == "i" ]; then
-      verify-minion $i
+      verify-minion $i $num_retries || return 1
     elif [ "${roles[${ii}]}" == "ai" ]; then
-      verify-master
-      verify-minion $i
+      verify-master $num_retries || return 1
+      verify-minion $i $num_retries || return 1
     else
       echo "unsupported role for ${i}. please check"
       exit 1
@@ -144,28 +145,28 @@ function verify-cluster {
 
 }
 
-function verify-master(){
+function verify-master {
+  number_of_tries=$1
   # verify master has all required daemons
   echo "Validating master"
   local -a required_daemon=("kube-apiserver" "kube-controller-manager" "kube-scheduler")
   local validated="1"
-  until [[ "$validated" == "0" ]]; do
+  until [[ "$validated" == "0" || number_of_tries > num_retries ]]; do
     validated="0"
     local daemon
     for daemon in "${required_daemon[@]}"; do
       ssh "$MASTER" "pgrep -f ${daemon}" >/dev/null 2>&1 || {
         printf "."
         validated="1"
-        # Try to start the service again if it's not running.
-        ssh "$MASTER" "sudo service $daemon start" >/dev/null 2>&1 || true
         sleep 2
       }
     done
   done
-
+  return $validated
 }
 
 function verify-minion(){
+  number_of_tries=$1
   # verify minion has all required daemons
   echo "Validating ${1}"
   local -a required_daemon=("kube-proxy" "kubelet" "docker")
@@ -341,7 +342,10 @@ function kube-up {
   done
   wait
 
-  verify-cluster
+  verified_cluster=1
+  until [[ "$verified_cluster" == "0" ]]; do
+    verified_cluster=(verify-cluster || restart-cluster-services)
+  done
   detect-master
   export CONTEXT="ubuntu"
   export KUBE_SERVER="http://${KUBE_MASTER_IP}:8080"
