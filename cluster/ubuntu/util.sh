@@ -154,6 +154,8 @@ function verify-master(){
           printf "\nWarning: Process \"${daemon}\" failed to run on ${MASTER}, please check.\n"
           exit 1
         fi
+        # Restart the service that is not running.
+        ssh $SSH_OPTS "$MASTER" "sudo service $daemon start" >/dev/null 2>&1 || true
         sleep 2
       }
     done
@@ -181,6 +183,8 @@ function verify-node(){
           printf "\nWarning: Process \"${daemon}\" failed to run on ${1}, please check.\n"
           exit 1
         fi
+        # Restart the service that is not running.
+        ssh $SSH_OPTS "$1" "sudo service $daemon start" >/dev/null 2>&1 || true
         sleep 2
       }
     done
