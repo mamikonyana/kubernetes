@@ -117,18 +117,17 @@ function trap-add {
 }
 
 function verify-cluster {
-  num_retries=$1
   ii=0
 
   for i in ${nodes}
   do
     if [ "${roles[${ii}]}" == "a" ]; then
-      verify-master $num_retries || return 1
+      verify-master
     elif [ "${roles[${ii}]}" == "i" ]; then
-      verify-minion $i $num_retries || return 1
+      verify-minion $i
     elif [ "${roles[${ii}]}" == "ai" ]; then
-      verify-master $num_retries || return 1
-      verify-minion $i $num_retries || return 1
+      verify-master
+      verify-minion $i
     else
       echo "unsupported role for ${i}. please check"
       exit 1
@@ -145,45 +144,45 @@ function verify-cluster {
 
 }
 
-function verify-master {
-  number_of_tries=$1
+function verify-master(){
   # verify master has all required daemons
-  echo "Validating master"
+  printf "Validating master"
   local -a required_daemon=("kube-apiserver" "kube-controller-manager" "kube-scheduler")
   local validated="1"
-  until [[ "$validated" == "0" || number_of_tries > num_retries ]]; do
+  until [[ "$validated" == "0" ]]; do
     validated="0"
     local daemon
     for daemon in "${required_daemon[@]}"; do
-      ssh "$MASTER" "pgrep -f ${daemon}" >/dev/null 2>&1 || {
+      ssh $SSH_OPTS "$MASTER" "pgrep -f ${daemon}" >/dev/null 2>&1 || {
         printf "."
         validated="1"
+        ssh $SSH_OPTS "$1" "sudo service $daemon start" >/dev/null 2>&1 || true
         sleep 2
       }
     done
   done
-  return $validated
+  printf "\n"
+
 }
 
 function verify-minion(){
-  number_of_tries=$1
   # verify minion has all required daemons
-  echo "Validating ${1}"
+  printf "Validating ${1}"
   local -a required_daemon=("kube-proxy" "kubelet" "docker")
   local validated="1"
   until [[ "$validated" == "0" ]]; do
     validated="0"
     local daemon
     for daemon in "${required_daemon[@]}"; do
-      ssh "$1" "pgrep -f $daemon" >/dev/null 2>&1 || {
+      ssh $SSH_OPTS "$1" "pgrep -f $daemon" >/dev/null 2>&1 || {
         printf "."
         validated="1"
-        # Try to start the service again if it's not running.
-        ssh "$1" "sudo service $daemon start" >/dev/null 2>&1 || true
+        ssh $SSH_OPTS "$1" "sudo service $daemon start" >/dev/null 2>&1 || true
         sleep 2
       }
     done
   done
+  printf "\n"
 }
 
 function create-etcd-opts(){
@@ -342,10 +341,7 @@ function kube-up {
   done
   wait
 
-  verified_cluster=1
-  until [[ "$verified_cluster" == "0" ]]; do
-    verified_cluster=(verify-cluster || restart-cluster-services)
-  done
+  verify-cluster
   detect-master
   export CONTEXT="ubuntu"
   export KUBE_SERVER="http://${KUBE_MASTER_IP}:8080"
