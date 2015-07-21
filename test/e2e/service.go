@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
@@ -36,7 +37,7 @@ import (
 )
 
 // This should match whatever the default/configured range is
-var ServiceNodePortRange = util.PortRange{Base: 30000, Size: 2767}
+var ServiceNodePortRange = util.PortRange{Base: 30000, Size: 2768}
 
 var _ = Describe("Services", func() {
 	var c *client.Client
@@ -245,8 +246,12 @@ var _ = Describe("Services", func() {
 			}
 		}()
 
+		inboundPort := 3000
+
 		service := t.BuildServiceSpec()
 		service.Spec.Type = api.ServiceTypeLoadBalancer
+		service.Spec.Ports[0].Port = inboundPort
+		service.Spec.Ports[0].TargetPort = util.NewIntOrStringFromInt(80)
 
 		By("creating service " + serviceName + " with external load balancer in namespace " + ns)
 		result, err := t.CreateService(service)
@@ -278,7 +283,7 @@ var _ = Describe("Services", func() {
 		testReachable(pickMinionIP(c), port.NodePort)
 
 		By("hitting the pod through the service's external load balancer")
-		testLoadBalancerReachable(ingress, 80)
+		testLoadBalancerReachable(ingress, inboundPort)
 	})
 
 	It("should be able to create a functioning NodePort service", func() {
@@ -327,6 +332,9 @@ var _ = Describe("Services", func() {
 	})
 
 	It("should be able to change the type and nodeport settings of a service", func() {
+		// requires ExternalLoadBalancer
+		SkipUnlessProviderIs("gce", "gke", "aws")
+
 		serviceName := "mutability-service-test"
 		ns := namespaces[0]
 
@@ -363,8 +371,9 @@ var _ = Describe("Services", func() {
 		t.CreateWebserverRC(1)
 
 		By("changing service " + serviceName + " to type=NodePort")
-		service.Spec.Type = api.ServiceTypeNodePort
-		service, err = c.Services(ns).Update(service)
+		service, err = updateService(c, ns, serviceName, func(s *api.Service) {
+			s.Spec.Type = api.ServiceTypeNodePort
+		})
 		Expect(err).NotTo(HaveOccurred())
 
 		if service.Spec.Type != api.ServiceTypeNodePort {
@@ -391,7 +400,9 @@ var _ = Describe("Services", func() {
 
 		By("changing service " + serviceName + " to type=LoadBalancer")
 		service.Spec.Type = api.ServiceTypeLoadBalancer
-		service, err = c.Services(ns).Update(service)
+		service, err = updateService(c, ns, serviceName, func(s *api.Service) {
+			s.Spec.Type = api.ServiceTypeLoadBalancer
+		})
 		Expect(err).NotTo(HaveOccurred())
 
 		// Wait for the load balancer to be created asynchronously
@@ -427,8 +438,9 @@ var _ = Describe("Services", func() {
 			//Check for (unlikely) assignment at bottom of range
 			nodePort2 = nodePort1 + 1
 		}
-		service.Spec.Ports[0].NodePort = nodePort2
-		service, err = c.Services(ns).Update(service)
+		service, err = updateService(c, ns, serviceName, func(s *api.Service) {
+			s.Spec.Ports[0].NodePort = nodePort2
+		})
 		Expect(err).NotTo(HaveOccurred())
 
 		if service.Spec.Type != api.ServiceTypeLoadBalancer {
@@ -456,9 +468,10 @@ var _ = Describe("Services", func() {
 		testNotReachable(ip, nodePort1)
 
 		By("changing service " + serviceName + " back to type=ClusterIP")
-		service.Spec.Type = api.ServiceTypeClusterIP
-		service.Spec.Ports[0].NodePort = 0
-		service, err = c.Services(ns).Update(service)
+		service, err = updateService(c, ns, serviceName, func(s *api.Service) {
+			s.Spec.Type = api.ServiceTypeClusterIP
+			s.Spec.Ports[0].NodePort = 0
+		})
 		Expect(err).NotTo(HaveOccurred())
 
 		if service.Spec.Type != api.ServiceTypeClusterIP {
@@ -490,6 +503,9 @@ var _ = Describe("Services", func() {
 	})
 
 	It("should release the load balancer when Type goes from LoadBalancer -> NodePort", func() {
+		// requires ExternalLoadBalancer
+		SkipUnlessProviderIs("gce", "gke", "aws")
+
 		serviceName := "service-release-lb"
 		ns := namespaces[0]
 
@@ -542,8 +558,9 @@ var _ = Describe("Services", func() {
 		testLoadBalancerReachable(ingress, 80)
 
 		By("changing service " + serviceName + " to type=NodePort")
-		service.Spec.Type = api.ServiceTypeNodePort
-		service, err = c.Services(ns).Update(service)
+		service, err = updateService(c, ns, serviceName, func(s *api.Service) {
+			s.Spec.Type = api.ServiceTypeNodePort
+		})
 		Expect(err).NotTo(HaveOccurred())
 
 		if service.Spec.Type != api.ServiceTypeNodePort {
@@ -668,8 +685,9 @@ var _ = Describe("Services", func() {
 			}
 		}
 		By(fmt.Sprintf("changing service "+serviceName+" to out-of-range NodePort %d", outOfRangeNodePort))
-		service.Spec.Ports[0].NodePort = outOfRangeNodePort
-		result, err := t.Client.Services(t.Namespace).Update(service)
+		result, err := updateService(c, ns, serviceName, func(s *api.Service) {
+			s.Spec.Ports[0].NodePort = outOfRangeNodePort
+		})
 		if err == nil {
 			Failf("failed to prevent update of service with out-of-range NodePort: %v", result)
 		}
@@ -791,6 +809,29 @@ var _ = Describe("Services", func() {
 	})
 })
 
+// updateService fetches a service, calls the update function on it,
+// and then attempts to send the updated service. It retries up to 2
+// times in the face of timeouts and conflicts.
+func updateService(c *client.Client, namespace, serviceName string, update func(*api.Service)) (*api.Service, error) {
+	var service *api.Service
+	var err error
+	for i := 0; i < 3; i++ {
+		service, err = c.Services(namespace).Get(serviceName)
+		if err != nil {
+			return service, err
+		}
+
+		update(service)
+
+		service, err = c.Services(namespace).Update(service)
+
+		if !errors.IsConflict(err) && !errors.IsServerTimeout(err) {
+			return service, err
+		}
+	}
+	return service, err
+}
+
 func waitForLoadBalancerIngress(c *client.Client, serviceName, namespace string) (*api.Service, error) {
 	// TODO: once support ticket 21807001 is resolved, reduce this timeout back to something reasonable
 	const timeout = 20 * time.Minute
@@ -894,29 +935,28 @@ func validatePortsOrFail(endpoints map[string][]int, expectedEndpoints map[strin
 	}
 }
 
-func validateEndpointsOrFail(c *client.Client, ns, serviceName string, expectedEndpoints map[string][]int) {
-	By(fmt.Sprintf("Validating endpoints %v with on service %s/%s", expectedEndpoints, ns, serviceName))
-	for {
-		endpoints, err := c.Endpoints(ns).Get(serviceName)
-		if err == nil {
-			By(fmt.Sprintf("Found endpoints %v", endpoints))
-
-			portsByIp := getPortsByIp(endpoints.Subsets)
-
-			By(fmt.Sprintf("Found ports by ip %v", portsByIp))
-			if len(portsByIp) == len(expectedEndpoints) {
-				expectedPortsByIp := translatePodNameToIpOrFail(c, ns, expectedEndpoints)
-				validatePortsOrFail(portsByIp, expectedPortsByIp)
-				break
-			} else {
-				By(fmt.Sprintf("Unexpected number of endpoints: found %v, expected %v (ignoring for 1 second)", portsByIp, expectedEndpoints))
-			}
-		} else {
-			By(fmt.Sprintf("Failed to get endpoints: %v (ignoring for 1 second)", err))
+func validateEndpointsOrFail(c *client.Client, namespace, serviceName string, expectedEndpoints map[string][]int) {
+	By(fmt.Sprintf("Waiting up to %v for service %s in namespace %s to expose endpoints %v", serviceStartTimeout, serviceName, namespace, expectedEndpoints))
+	for start := time.Now(); time.Since(start) < serviceStartTimeout; time.Sleep(5 * time.Second) {
+		endpoints, err := c.Endpoints(namespace).Get(serviceName)
+		if err != nil {
+			Logf("Get endpoints failed (%v elapsed, ignoring for 5s): %v", time.Since(start), err)
+			continue
 		}
-		time.Sleep(time.Second)
+		Logf("Found endpoints %v", endpoints)
+
+		portsByIp := getPortsByIp(endpoints.Subsets)
+		Logf("Found ports by ip %v", portsByIp)
+
+		if len(portsByIp) == len(expectedEndpoints) {
+			expectedPortsByIp := translatePodNameToIpOrFail(c, namespace, expectedEndpoints)
+			validatePortsOrFail(portsByIp, expectedPortsByIp)
+			By(fmt.Sprintf("Successfully validated that service %s in namespace %s exposes endpoints %v (%v elapsed)", serviceName, namespace, expectedEndpoints, time.Since(start)))
+			return
+		}
+		Logf("Unexpected number of endpoints: found %v, expected %v (%v elapsed, ignoring for 5s)", portsByIp, expectedEndpoints, time.Since(start))
 	}
-	By(fmt.Sprintf("successfully validated endpoints %v with on service %s/%s", expectedEndpoints, ns, serviceName))
+	Failf("Timed out waiting for service %s in namespace %s to expose endpoints %v (%v elapsed)", serviceName, namespace, expectedEndpoints, serviceStartTimeout)
 }
 
 func addEndpointPodOrFail(c *client.Client, ns, name string, labels map[string]string, containerPorts []api.ContainerPort) {

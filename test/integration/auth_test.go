@@ -54,11 +54,7 @@ import (
 var nodeResourceName string
 
 func init() {
-	if api.PreV1Beta3(testapi.Version()) {
-		nodeResourceName = "minions"
-	} else {
-		nodeResourceName = "nodes"
-	}
+	nodeResourceName = "nodes"
 }
 
 const (
@@ -90,7 +86,7 @@ func timeoutPath(resource, namespace, name string) string {
 var aPod string = `
 {
   "kind": "Pod",
-  "apiVersion": "v1beta3",
+  "apiVersion": "v1",
   "metadata": {
     "name": "a",
     "creationTimestamp": null%s
@@ -108,7 +104,7 @@ var aPod string = `
 var aRC string = `
 {
   "kind": "ReplicationController",
-  "apiVersion": "v1beta3",
+  "apiVersion": "v1",
   "metadata": {
     "name": "a",
     "labels": {
@@ -141,7 +137,7 @@ var aRC string = `
 var aService string = `
 {
   "kind": "Service",
-  "apiVersion": "v1beta3",
+  "apiVersion": "v1",
   "metadata": {
     "name": "a",
     "labels": {
@@ -158,14 +154,14 @@ var aService string = `
     "selector": {
       "name": "a"
     },
-    "portalIP": "10.0.0.100"
+    "clusterIP": "10.0.0.100"
   }
 }
 `
 var aNode string = `
 {
   "kind": "Node",
-  "apiVersion": "v1beta3",
+  "apiVersion": "v1",
   "metadata": {
     "name": "a"%s
   },
@@ -177,7 +173,7 @@ var aNode string = `
 var aEvent string = `
 {
   "kind": "Event",
-  "apiVersion": "v1beta3",
+  "apiVersion": "v1",
   "metadata": {
     "name": "a"%s
   },
@@ -185,7 +181,7 @@ var aEvent string = `
     "kind": "Node",
     "namespace": "default",
     "name": "a",
-    "apiVersion": "v1beta3"
+    "apiVersion": "v1"
   }
 }
 `
@@ -193,7 +189,7 @@ var aEvent string = `
 var aBinding string = `
 {
   "kind": "Binding",
-  "apiVersion": "v1beta3",
+  "apiVersion": "v1",
   "metadata": {
     "name": "a"%s
   },
@@ -206,7 +202,7 @@ var aBinding string = `
 var aEndpoints string = `
 {
   "kind": "Endpoints",
-  "apiVersion": "v1beta3",
+  "apiVersion": "v1",
   "metadata": {
     "name": "a"%s
   },
@@ -214,7 +210,7 @@ var aEndpoints string = `
     {
       "addresses": [
         {
-          "IP": "10.10.1.1"
+          "ip": "10.10.1.1"
         }
       ],
       "ports": [
@@ -231,7 +227,7 @@ var aEndpoints string = `
 var deleteNow string = `
 {
   "kind": "DeleteOptions",
-  "apiVersion": "v1beta3",
+  "apiVersion": "v1",
   "gracePeriodSeconds": null%s
 }
 `
@@ -397,8 +393,10 @@ func TestAuthModeAlwaysAllow(t *testing.T) {
 		EnableUISupport:       false,
 		EnableIndex:           true,
 		APIPrefix:             "/api",
-		Authorizer:            apiserver.NewAlwaysAllowAuthorizer(),
-		AdmissionControl:      admit.NewAlwaysAdmit(),
+		// enable v1beta3 if we are testing that api version.
+		EnableV1Beta3:    testapi.Version() == "v1beta3",
+		Authorizer:       apiserver.NewAlwaysAllowAuthorizer(),
+		AdmissionControl: admit.NewAlwaysAdmit(),
 	})
 
 	transport := http.DefaultTransport
@@ -462,17 +460,6 @@ func parseResourceVersion(response []byte) (string, float64, error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("unexpected error unmarshaling resultBody: %v", err)
 	}
-	apiVersion, ok := resultBodyMap["apiVersion"].(string)
-	if !ok {
-		return "", 0, fmt.Errorf("unexpected error, apiVersion not found in JSON response: %v", string(response))
-	}
-	if api.PreV1Beta3(apiVersion) {
-		return parsePreV1Beta3ResourceVersion(resultBodyMap, response)
-	}
-	return parseV1Beta3ResourceVersion(resultBodyMap, response)
-}
-
-func parseV1Beta3ResourceVersion(resultBodyMap map[string]interface{}, response []byte) (string, float64, error) {
 	metadata, ok := resultBodyMap["metadata"].(map[string]interface{})
 	if !ok {
 		return "", 0, fmt.Errorf("unexpected error, metadata not found in JSON response: %v", string(response))
@@ -488,19 +475,6 @@ func parseV1Beta3ResourceVersion(resultBodyMap map[string]interface{}, response 
 	resourceVersion, err := strconv.ParseFloat(resourceVersionString, 64)
 	if err != nil {
 		return "", 0, fmt.Errorf("unexpected error, could not parse resourceVersion as float64, err: %s. JSON response: %v", err, string(response))
-	}
-	return id, resourceVersion, nil
-}
-
-func parsePreV1Beta3ResourceVersion(resultBodyMap map[string]interface{}, response []byte) (string, float64, error) {
-	id, ok := resultBodyMap["id"].(string)
-	if !ok {
-		return "", 0, fmt.Errorf("unexpected error, id not found in JSON response: %v", string(response))
-	}
-
-	resourceVersion, ok := resultBodyMap["resourceVersion"].(float64)
-	if !ok {
-		return "", 0, fmt.Errorf("unexpected error, resourceVersion not found in JSON response: %v", string(response))
 	}
 	return id, resourceVersion, nil
 }
@@ -537,8 +511,10 @@ func TestAuthModeAlwaysDeny(t *testing.T) {
 		EnableUISupport:       false,
 		EnableIndex:           true,
 		APIPrefix:             "/api",
-		Authorizer:            apiserver.NewAlwaysDenyAuthorizer(),
-		AdmissionControl:      admit.NewAlwaysAdmit(),
+		// enable v1beta3 if we are testing that api version.
+		EnableV1Beta3:    testapi.Version() == "v1beta3",
+		Authorizer:       apiserver.NewAlwaysDenyAuthorizer(),
+		AdmissionControl: admit.NewAlwaysAdmit(),
 	})
 
 	transport := http.DefaultTransport
@@ -604,9 +580,11 @@ func TestAliceNotForbiddenOrUnauthorized(t *testing.T) {
 		EnableUISupport:       false,
 		EnableIndex:           true,
 		APIPrefix:             "/api",
-		Authenticator:         getTestTokenAuth(),
-		Authorizer:            allowAliceAuthorizer{},
-		AdmissionControl:      admit.NewAlwaysAdmit(),
+		// enable v1beta3 if we are testing that api version.
+		EnableV1Beta3:    testapi.Version() == "v1beta3",
+		Authenticator:    getTestTokenAuth(),
+		Authorizer:       allowAliceAuthorizer{},
+		AdmissionControl: admit.NewAlwaysAdmit(),
 	})
 
 	previousResourceVersion := make(map[string]float64)
@@ -691,9 +669,11 @@ func TestBobIsForbidden(t *testing.T) {
 		EnableUISupport:       false,
 		EnableIndex:           true,
 		APIPrefix:             "/api",
-		Authenticator:         getTestTokenAuth(),
-		Authorizer:            allowAliceAuthorizer{},
-		AdmissionControl:      admit.NewAlwaysAdmit(),
+		// enable v1beta3 if we are testing that api version.
+		EnableV1Beta3:    testapi.Version() == "v1beta3",
+		Authenticator:    getTestTokenAuth(),
+		Authorizer:       allowAliceAuthorizer{},
+		AdmissionControl: admit.NewAlwaysAdmit(),
 	})
 
 	transport := http.DefaultTransport
@@ -752,9 +732,11 @@ func TestUnknownUserIsUnauthorized(t *testing.T) {
 		EnableUISupport:       false,
 		EnableIndex:           true,
 		APIPrefix:             "/api",
-		Authenticator:         getTestTokenAuth(),
-		Authorizer:            allowAliceAuthorizer{},
-		AdmissionControl:      admit.NewAlwaysAdmit(),
+		// enable v1beta3 if we are testing that api version.
+		EnableV1Beta3:    testapi.Version() == "v1beta3",
+		Authenticator:    getTestTokenAuth(),
+		Authorizer:       allowAliceAuthorizer{},
+		AdmissionControl: admit.NewAlwaysAdmit(),
 	})
 
 	transport := http.DefaultTransport
@@ -832,9 +814,11 @@ func TestNamespaceAuthorization(t *testing.T) {
 		EnableUISupport:       false,
 		EnableIndex:           true,
 		APIPrefix:             "/api",
-		Authenticator:         getTestTokenAuth(),
-		Authorizer:            a,
-		AdmissionControl:      admit.NewAlwaysAdmit(),
+		// enable v1beta3 if we are testing that api version.
+		EnableV1Beta3:    testapi.Version() == "v1beta3",
+		Authenticator:    getTestTokenAuth(),
+		Authorizer:       a,
+		AdmissionControl: admit.NewAlwaysAdmit(),
 	})
 
 	previousResourceVersion := make(map[string]float64)
@@ -947,9 +931,11 @@ func TestKindAuthorization(t *testing.T) {
 		EnableUISupport:       false,
 		EnableIndex:           true,
 		APIPrefix:             "/api",
-		Authenticator:         getTestTokenAuth(),
-		Authorizer:            a,
-		AdmissionControl:      admit.NewAlwaysAdmit(),
+		// enable v1beta3 if we are testing that api version.
+		EnableV1Beta3:    testapi.Version() == "v1beta3",
+		Authenticator:    getTestTokenAuth(),
+		Authorizer:       a,
+		AdmissionControl: admit.NewAlwaysAdmit(),
 	})
 
 	previousResourceVersion := make(map[string]float64)
@@ -1049,9 +1035,11 @@ func TestReadOnlyAuthorization(t *testing.T) {
 		EnableUISupport:       false,
 		EnableIndex:           true,
 		APIPrefix:             "/api",
-		Authenticator:         getTestTokenAuth(),
-		Authorizer:            a,
-		AdmissionControl:      admit.NewAlwaysAdmit(),
+		// enable v1beta3 if we are testing that api version.
+		EnableV1Beta3:    testapi.Version() == "v1beta3",
+		Authenticator:    getTestTokenAuth(),
+		Authorizer:       a,
+		AdmissionControl: admit.NewAlwaysAdmit(),
 	})
 
 	transport := http.DefaultTransport

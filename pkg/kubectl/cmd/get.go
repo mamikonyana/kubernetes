@@ -17,7 +17,6 @@ limitations under the License.
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"io"
 
@@ -95,26 +94,14 @@ func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string
 	allNamespaces := cmdutil.GetFlagBool(cmd, "all-namespaces")
 	mapper, typer := f.Object()
 
-	cmdNamespace, err := f.DefaultNamespace()
+	cmdNamespace, _, err := f.DefaultNamespace()
 	if err != nil {
 		return err
 	}
 
 	if len(args) == 0 {
-		fmt.Fprint(out, `
-You must specify the type of resource to get. Valid resource types include:
-   * pods (aka 'po')
-   * replicationcontrollers (aka 'rc')
-   * services
-   * nodes (aka 'no')
-   * events (aka 'ev')
-   * secrets
-   * limits
-   * persistentVolumes (aka 'pv')
-   * persistentVolumeClaims (aka 'pvc')
-   * quota
-`)
-		return errors.New("Required resource not specified.")
+		fmt.Fprint(out, "You must specify the type of resource to get. ", valid_resources)
+		return cmdutil.UsageError(cmd, "Required resource not specified.")
 	}
 
 	// handle watch separately since we cannot watch multiple resource types

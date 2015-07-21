@@ -30,8 +30,13 @@ ASG_NAME="${NODE_INSTANCE_PREFIX}-group"
 # We could allow the master disk volume id to be specified in future
 MASTER_DISK_ID=
 
+# Defaults: ubuntu -> vivid
+if [[ "${KUBE_OS_DISTRIBUTION}" == "ubuntu" ]]; then
+  KUBE_OS_DISTRIBUTION=vivid
+fi
+
 case "${KUBE_OS_DISTRIBUTION}" in
-  ubuntu|wheezy|coreos)
+  trusty|wheezy|jessie|vivid|coreos)
     source "${KUBE_ROOT}/cluster/aws/${KUBE_OS_DISTRIBUTION}/util.sh"
     ;;
   *)
@@ -78,10 +83,6 @@ function get_subnet_id {
   python -c "import json,sys; lst = [str(subnet['SubnetId']) for subnet in json.load(sys.stdin)['Subnets'] if subnet['VpcId'] == '$1' and subnet['AvailabilityZone'] == '$2']; print ''.join(lst)"
 }
 
-function get_cidr {
-  python -c "import json,sys; lst = [str(subnet['CidrBlock']) for subnet in json.load(sys.stdin)['Subnets'] if subnet['VpcId'] == '$1' and subnet['AvailabilityZone'] == '$2']; print ''.join(lst)"
-}
-
 function get_igw_id {
   python -c "import json,sys; lst = [str(igw['InternetGatewayId']) for igw in json.load(sys.stdin)['InternetGateways'] for attachment in igw['Attachments'] if attachment['VpcId'] == '$1']; print ''.join(lst)"
 }
@@ -114,6 +115,13 @@ function get_instance_public_ip {
   $AWS_CMD --output text describe-instances \
     --instance-ids ${instance_id} \
     --query Reservations[].Instances[].NetworkInterfaces[0].Association.PublicIp
+}
+
+function get_instance_private_ip {
+  local instance_id=$1
+  $AWS_CMD --output text describe-instances \
+    --instance-ids ${instance_id} \
+    --query Reservations[].Instances[].NetworkInterfaces[0].PrivateIpAddress
 }
 
 # Gets a security group id, by name ($1)
@@ -221,11 +229,17 @@ function detect-security-groups {
 #   AWS_IMAGE
 function detect-image () {
 case "${KUBE_OS_DISTRIBUTION}" in
-  ubuntu|coreos)
-    detect-ubuntu-image
+  trusty|coreos)
+    detect-trusty-image
+    ;;
+  vivid)
+    detect-vivid-image
     ;;
   wheezy)
     detect-wheezy-image
+    ;;
+  jessie)
+    detect-jessie-image
     ;;
   *)
     echo "Please specify AWS_IMAGE directly (distro not recognized)"
@@ -234,12 +248,12 @@ case "${KUBE_OS_DISTRIBUTION}" in
 esac
 }
 
-# Detects the AMI to use for ubuntu (considering the region)
+# Detects the AMI to use for trusty (considering the region)
 # Used by CoreOS & Ubuntu
 #
 # Vars set:
 #   AWS_IMAGE
-function detect-ubuntu-image () {
+function detect-trusty-image () {
   # This is the ubuntu 14.04 image for <region>, amd64, hvm:ebs-ssd
   # See here: http://cloud-images.ubuntu.com/locator/ec2/ for other images
   # This will need to be updated from time to time as amis are deprecated
@@ -301,9 +315,18 @@ function detect-ubuntu-image () {
 # Note that this is a different hash from the OpenSSH hash.
 # But AWS gives us this public key hash in the describe keys output, so we should stick with this format.
 # Hopefully this will be done by the aws cli tool one day: https://github.com/aws/aws-cli/issues/191
+# NOTE: This does not work on Mavericks, due to an odd ssh-keygen version, so we use get-ssh-fingerprint instead
 function get-aws-fingerprint {
   local -r pubkey_path=$1
   ssh-keygen -f ${pubkey_path} -e -m PKCS8  | openssl rsa -pubin -outform DER | openssl md5 -c | sed -e 's/(stdin)= //g'
+}
+
+# Computes the SSH fingerprint for a public key file ($1)
+# #1: path to public key file
+# Note this is different from the AWS fingerprint; see notes on get-aws-fingerprint
+function get-ssh-fingerprint {
+  local -r pubkey_path=$1
+  ssh-keygen -lf ${pubkey_path} | cut -f2 -d' '
 }
 
 # Import an SSH public key to AWS.
@@ -660,14 +683,18 @@ function kube-up {
     ssh-keygen -f "$AWS_SSH_KEY" -N ''
   fi
 
-  AWS_SSH_KEY_FINGERPRINT=$(get-aws-fingerprint ${AWS_SSH_KEY}.pub)
+  # Note that we use get-ssh-fingerprint, so this works on OSX Mavericks
+  # get-aws-fingerprint gives the same fingerprint that AWS computes,
+  # but OSX Mavericks ssh-keygen can't compute it
+  AWS_SSH_KEY_FINGERPRINT=$(get-ssh-fingerprint ${AWS_SSH_KEY}.pub)
   echo "Using SSH key with (AWS) fingerprint: ${AWS_SSH_KEY_FINGERPRINT}"
   AWS_SSH_KEY_NAME="kubernetes-${AWS_SSH_KEY_FINGERPRINT//:/}"
 
   import-public-key ${AWS_SSH_KEY_NAME} ${AWS_SSH_KEY}.pub
 
-  VPC_ID=$(get_vpc_id)
-
+  if [[ -z "${VPC_ID:-}" ]]; then
+    VPC_ID=$(get_vpc_id)
+  fi
   if [[ -z "$VPC_ID" ]]; then
 	  echo "Creating vpc."
 	  VPC_ID=$($AWS_CMD create-vpc --cidr-block $INTERNAL_IP_BASE.0/16 | json_val '["Vpc"]["VpcId"]')
@@ -679,13 +706,15 @@ function kube-up {
 
   echo "Using VPC $VPC_ID"
 
-  SUBNET_ID=$($AWS_CMD describe-subnets --filters Name=tag:KubernetesCluster,Values=${CLUSTER_ID} | get_subnet_id $VPC_ID $ZONE)
+  if [[ -z "${SUBNET_ID:-}" ]]; then
+    SUBNET_ID=$($AWS_CMD describe-subnets --filters Name=tag:KubernetesCluster,Values=${CLUSTER_ID} | get_subnet_id $VPC_ID $ZONE)
+  fi
   if [[ -z "$SUBNET_ID" ]]; then
     echo "Creating subnet."
     SUBNET_ID=$($AWS_CMD create-subnet --cidr-block $INTERNAL_IP_BASE.0/24 --vpc-id $VPC_ID --availability-zone ${ZONE} | json_val '["Subnet"]["SubnetId"]')
     add-tag $SUBNET_ID KubernetesCluster ${CLUSTER_ID}
   else
-    EXISTING_CIDR=$($AWS_CMD describe-subnets --filters Name=tag:KubernetesCluster,Values=${CLUSTER_ID} | get_cidr $VPC_ID $ZONE)
+    EXISTING_CIDR=$($AWS_CMD describe-subnets --subnet-ids ${SUBNET_ID} --query Subnets[].CidrBlock --output text)
     echo "Using existing CIDR $EXISTING_CIDR"
     INTERNAL_IP_BASE=${EXISTING_CIDR%.*}
     MASTER_INTERNAL_IP=${INTERNAL_IP_BASE}${MASTER_IP_SUFFIX}
@@ -758,6 +787,13 @@ function kube-up {
   # Get or create master persistent volume
   ensure-master-pd
 
+  # Determine extra certificate names for master
+  octets=($(echo "$SERVICE_CLUSTER_IP_RANGE" | sed -e 's|/.*||' -e 's/\./ /g'))
+  ((octets[3]+=1))
+  service_ip=$(echo "${octets[*]}" | sed 's/ /./g')
+  MASTER_EXTRA_SANS="IP:${service_ip},DNS:kubernetes,DNS:kubernetes.default,DNS:kubernetes.default.svc,DNS:kubernetes.default.svc.${DNS_DOMAIN},DNS:${MASTER_NAME}"
+
+
   (
     # We pipe this to the ami as a startup script in the user-data field.  Requires a compatible ami
     echo "#! /bin/bash"
@@ -788,6 +824,7 @@ function kube-up {
     echo "readonly KUBELET_TOKEN='${KUBELET_TOKEN}'"
     echo "readonly KUBE_PROXY_TOKEN='${KUBE_PROXY_TOKEN}'"
     echo "readonly DOCKER_STORAGE='${DOCKER_STORAGE:-}'"
+    echo "readonly MASTER_EXTRA_SANS='${MASTER_EXTRA_SANS:-}'"
     grep -v "^#" "${KUBE_ROOT}/cluster/aws/templates/common.sh"
     grep -v "^#" "${KUBE_ROOT}/cluster/aws/templates/format-disks.sh"
     grep -v "^#" "${KUBE_ROOT}/cluster/aws/templates/setup-master-pd.sh"

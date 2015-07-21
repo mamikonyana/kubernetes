@@ -51,11 +51,11 @@ var _ = Describe("Reboot", func() {
 		c, err = loadClient()
 		Expect(err).NotTo(HaveOccurred())
 
-		// These tests requires SSH, so the provider check should be identical to there
+		// These tests requires SSH to nodes, so the provider check should be identical to there
 		// (the limiting factor is the implementation of util.go's getSigner(...)).
 
 		// Cluster must support node reboot
-		SkipUnlessProviderIs("gce", "aws")
+		SkipUnlessProviderIs("gce", "gke", "aws")
 	})
 
 	It("each node by ordering clean reboot and ensure they function upon restart", func() {
@@ -85,13 +85,17 @@ var _ = Describe("Reboot", func() {
 	It("each node by dropping all inbound packets for a while and ensure they function afterwards", func() {
 		// tell the firewall to drop all inbound packets for a while
 		// We sleep 10 seconds to give some time for ssh command to cleanly finish before starting dropping inbound packets.
-		testReboot(c, "nohup sh -c 'sleep 10 && sudo iptables -A INPUT -j DROP && sleep 120 && sudo iptables -D INPUT -j DROP' >/dev/null 2>&1 &")
+		// We still accept packages send from localhost to prevent monit from restarting kubelet.
+		testReboot(c, "nohup sh -c 'sleep 10 && sudo iptables -A INPUT -s 127.0.0.1 -j ACCEPT && sudo iptables -A INPUT -j DROP && "+
+			" sleep 120 && sudo iptables -D INPUT -j DROP && sudo iptables -D INPUT -s 127.0.0.1 -j ACCEPT' >/dev/null 2>&1 &")
 	})
 
 	It("each node by dropping all outbound packets for a while and ensure they function afterwards", func() {
 		// tell the firewall to drop all outbound packets for a while
 		// We sleep 10 seconds to give some time for ssh command to cleanly finish before starting dropping outbound packets.
-		testReboot(c, "nohup sh -c 'sleep 10 && sudo iptables -A OUTPUT -j DROP && sleep 120 && sudo iptables -D OUTPUT -j DROP' >/dev/null 2>&1 &")
+		// We still accept packages send to localhost to prevent monit from restarting kubelet.
+		testReboot(c, "nohup sh -c 'sleep 10 &&  sudo iptables -A OUTPUT -s 127.0.0.1 -j ACCEPT && sudo iptables -A OUTPUT -j DROP && "+
+			" sleep 120 && sudo iptables -D OUTPUT -j DROP && sudo iptables -D OUTPUT -s 127.0.0.1 -j ACCEPT' >/dev/null 2>&1 &")
 	})
 })
 
@@ -152,7 +156,7 @@ func issueSSHCommand(node *api.Node, provider, cmd string) error {
 // failed step, it will return false through result and not run the rest.
 func rebootNode(c *client.Client, provider, name, rebootCmd string, result chan bool) {
 	// Setup
-	ns := api.NamespaceDefault
+	ns := api.NamespaceSystem
 	ps := newPodStore(c, ns, labels.Everything(), fields.OneTermEqualSelector(client.PodHost, name))
 	defer ps.Stop()
 

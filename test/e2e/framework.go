@@ -18,6 +18,7 @@ package e2e
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
@@ -83,6 +84,11 @@ func (f *Framework) afterEach() {
 		// Note that we don't wait for any cleanup to propagate, which means
 		// that if you delete a bunch of pods right before ending your test,
 		// you may or may not see the killing/deletion/cleanup events.
+	}
+
+	// Check whether all nodes are ready after the test.
+	if err := allNodesReady(f.Client, time.Minute); err != nil {
+		Failf("All nodes should be ready after test, %v", err)
 	}
 
 	By(fmt.Sprintf("Destroying namespace %q for this suite.", f.Namespace.Name))
