@@ -30,6 +30,8 @@ export NUM_MINIONS=${NUM_MINIONS:-3}
 # define the IP range used for service cluster IPs.
 # according to rfc 1918 ref: https://tools.ietf.org/html/rfc1918 choose a private ip range here.
 export SERVICE_CLUSTER_IP_RANGE=${SERVICE_CLUSTER_IP_RANGE:-192.168.3.0/24}  # formerly PORTAL_NET
+# Ports that will be assigned by NodePort services
+export SERVICE_NODE_PORT_RANGE=${SERVICE_NODE_PORT_RANGE:-30000-32767}
 # define the IP range used for flannel overlay network, should not conflict with above SERVICE_CLUSTER_IP_RANGE
 export FLANNEL_NET=${FLANNEL_NET:-172.16.0.0/16}
 echo "FLANNEL_NET"

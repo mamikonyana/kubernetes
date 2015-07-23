@@ -216,6 +216,7 @@ KUBE_APISERVER_OPTS="--address=0.0.0.0 \
 --logtostderr=true \
 --service-cluster-ip-range=${1} \
 --admission_control=${2} \
+--service-node-port-range=${3} \
 --service_account_key_file=/tmp/kube-serviceaccount.key \
 --service_account_lookup=false "
 EOF
@@ -382,7 +383,7 @@ function provision-master() {
                             genServiceAccountsKey; \
                             setClusterInfo; \
                             create-etcd-opts "${mm[${MASTER_IP}]}" "${MASTER_IP}" "${CLUSTER}"; \
-                            create-kube-apiserver-opts "${SERVICE_CLUSTER_IP_RANGE}" "${ADMISSION_CONTROL}"; \
+                            create-kube-apiserver-opts "${SERVICE_CLUSTER_IP_RANGE}" "${ADMISSION_CONTROL}" "${SERVICE_NODE_PORT_RANGE}"; \
                             create-kube-controller-manager-opts "${MINION_IPS}"; \
                             create-kube-scheduler-opts; \
                             create-flanneld-opts; \
@@ -423,7 +424,7 @@ function provision-masterandminion() {
                             setClusterInfo; \
                             genServiceAccountsKey; \
                             create-etcd-opts "${mm[${MASTER_IP}]}" "${MASTER_IP}" "${CLUSTER}"; \
-                            create-kube-apiserver-opts "${SERVICE_CLUSTER_IP_RANGE}" "${ADMISSION_CONTROL}"; \
+                            create-kube-apiserver-opts "${SERVICE_CLUSTER_IP_RANGE}" "${ADMISSION_CONTROL}" "${SERVICE_NODE_PORT_RANGE}"; \
                             create-kube-controller-manager-opts "${MINION_IPS}"; \
                             create-kube-scheduler-opts; \
                             create-kubelet-opts "${MASTER_IP}" "${MASTER_IP}" "${DNS_SERVER_IP}" "${DNS_DOMAIN}";
