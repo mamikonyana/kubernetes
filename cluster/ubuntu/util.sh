@@ -238,6 +238,7 @@ KUBELET_OPTS="--address=0.0.0.0 \
 --hostname_override=$1 \
 --api_servers=http://$2:8080 \
 --logtostderr=true \
+--config=/etc/kubernetes/manifests \
 --cluster_dns=$3 \
 --cluster_domain=$4"
 EOF
